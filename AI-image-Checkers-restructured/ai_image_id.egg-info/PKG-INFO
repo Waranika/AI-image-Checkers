@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: ai-image-id
+Version: 0.1.0
+Summary: Evidence-fusion pipeline for identifying AI-generated images (provenance, watermarks, forensics)
+Requires-Python: >=3.10
+Requires-Dist: pydantic>=2.6
+Requires-Dist: numpy>=1.26
+Requires-Dist: opencv-python-headless>=4.9
+Requires-Dist: Pillow>=10.0
+Requires-Dist: PyWavelets>=1.5
+Requires-Dist: imagehash>=4.3
+Requires-Dist: pyexiftool>=0.5
+Requires-Dist: c2pa-python>=0.6
+Provides-Extra: api
+Requires-Dist: fastapi>=0.110; extra == "api"
+Requires-Dist: uvicorn>=0.29; extra == "api"
+Requires-Dist: python-multipart>=0.0.9; extra == "api"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
