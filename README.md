@@ -1,3 +1,4 @@
+![CI](https://github.com/Waranika/AI-image-Checkers/actions/workflows/ci.yml/badge.svg)
 # Identifying AI Image — MVP
 
 Minimal working pipeline for detecting AI-generated images through **evidence fusion**:
