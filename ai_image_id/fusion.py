@@ -79,18 +79,30 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
                 evidence=evidence, notes=notes, sha256=sha256, phash=phash,
             )
 
-    # Rule 3b — spectral heuristic alone (weak; capped at LIKELY / low confidence)
+    # Rule 3b — valid C2PA from a non-AI tool: capture claim can reach UNLIKELY;
+    # otherwise it's context, not a verdict (PRNU in phase 3 will strengthen this).
+    if prov.c2pa_present and prov.c2pa_valid and not declared:
+        if prov.c2pa_capture_claim:
+            notes.append(
+                f"valid C2PA capture claim from {prov.c2pa_generator} — camera origin declared"
+            )
+            return AnalysisResult(
+                ai_verdict=Verdict.UNLIKELY, confidence=0.75,
+                evidence=evidence, notes=notes, sha256=sha256, phash=phash,
+            )
+        notes.append(
+            f"valid C2PA manifest from non-AI tool ({prov.c2pa_generator}); no AI signals"
+        )
+
+    # Rule 3c — spectral heuristic alone is a single weak signal: note it, never
+    # let it flip the verdict without agreement from another signal.
     if spec.valid and spec.anomaly_score >= 0.8:
         notes.append(
-            f"strong periodic spectral peaks ({spec.n_peaks}) — heuristic signal only"
-        )
-        return AnalysisResult(
-            ai_verdict=Verdict.LIKELY, confidence=0.6,
-            evidence=evidence, notes=notes, sha256=sha256, phash=phash,
+            f"spectral peaks present ({spec.n_peaks}) — single weak signal, insufficient alone"
         )
 
     # Rule 4 — default
-    notes.append("no provenance, watermark, or strong intrinsic signal found")
+    notes.append("no AI-indicative signal found")
     notes.append("absence of watermarks/metadata is non-evidence, not proof of human origin")
     return AnalysisResult(
         ai_verdict=Verdict.INCONCLUSIVE, confidence=0.5,

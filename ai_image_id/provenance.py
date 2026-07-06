@@ -30,28 +30,46 @@ def _exiftool_json(path: Path) -> dict:
 
 
 def _c2pa_read(path: Path) -> tuple[bool, bool | None, str | None, dict | None]:
-    """Returns (present, valid, generator, raw_manifest_dict)."""
+    """Returns (present, valid, generator, raw). raw carries the manifest or an error."""
     try:
         import c2pa
     except ImportError:
         return False, None, None, None
+
+    reader = None
     try:
-        reader = c2pa.Reader.from_file(str(path))
-        manifest_json = reader.json()
-    except Exception:
-        # No manifest store found (the common case) or unreadable.
-        return False, None, None, None
+        try:
+            reader = c2pa.Reader(str(path))          # c2pa-python >= ~0.10
+        except (TypeError, AttributeError):
+            reader = c2pa.Reader.from_file(str(path))  # older API
+    except Exception as exc:
+        msg = f"{type(exc).__name__}: {exc}"
+        # "No manifest in file" is the normal case for most images.
+        if "manifest" in msg.lower() and ("not found" in msg.lower() or "missing" in msg.lower()):
+            return False, None, None, None
+        if "JUMBF" in msg or "ManifestNotFound" in msg:
+            return False, None, None, None
+        # Anything else is a real error — surface it instead of silently
+        # reporting "no manifest" (a silent AttributeError here once masked
+        # a broken API call for the entire pipeline).
+        return False, None, None, {"error": msg[:300]}
 
     try:
-        store = json.loads(manifest_json)
-    except (TypeError, json.JSONDecodeError):
-        return True, None, None, None
-
-    active = store.get("manifests", {}).get(store.get("active_manifest", ""), {})
-    generator = active.get("claim_generator") or active.get("claim_generator_info", [{}])[0].get("name")
-    # validation_status present and non-empty => problems found; absent => validated OK.
-    valid = not store.get("validation_status")
-    return True, valid, generator, store
+        manifest = reader.get_active_manifest() or {}
+        state = reader.get_validation_state()
+        valid = (str(state) == "Valid") if state is not None else None
+        generator = manifest.get("claim_generator")
+        if not generator:
+            info = manifest.get("claim_generator_info") or [{}]
+            generator = (info[0] or {}).get("name")
+        return True, valid, generator, manifest
+    except Exception as exc:
+        return True, None, None, {"error": f"{type(exc).__name__}: {exc}"[:300]}
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
 
 
 def analyze_provenance(path: Path) -> ProvenanceEvidence:
@@ -81,5 +99,11 @@ def analyze_provenance(path: Path) -> ProvenanceEvidence:
     ev.c2pa_generator = generator
     if generator and any(m in generator.lower() for m in AI_TOOL_MARKERS):
         ev.ai_metadata_hits.append(f"c2pa.claim_generator={generator}")
+    if raw:
+        blob = json.dumps(raw).lower()
+        if "digitalcapture" in blob:
+            ev.c2pa_capture_claim = True
+        if "trainedalgorithmicmedia" in blob and present:
+            ev.ai_metadata_hits.append("c2pa.digitalSourceType=trainedAlgorithmicMedia")
 
     return ev

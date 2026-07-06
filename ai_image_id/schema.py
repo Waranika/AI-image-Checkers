@@ -18,6 +18,7 @@ class ProvenanceEvidence(BaseModel):
     c2pa_present: bool = False
     c2pa_valid: Optional[bool] = None
     c2pa_generator: Optional[str] = None
+    c2pa_capture_claim: bool = False
     c2pa_raw: Optional[dict[str, Any]] = None
     iptc_digital_source_type: Optional[str] = None
     software: Optional[str] = None
