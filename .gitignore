@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# datasets, embeddings, checkpoints — never commit these
+data/
+emb/
+*.pt
+*.npz
+*.onnx
+head.calibration.json
+
+# notebooks: strip outputs before committing
+.ipynb_checkpoints/
