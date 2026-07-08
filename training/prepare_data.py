@@ -65,7 +65,11 @@ def prepare_split(
     rows: list[dict] = []
 
     for label, src_dir in (("real", Path(real_dir)), ("fake", Path(fake_dir))):
+        if not src_dir.is_dir():
+            raise FileNotFoundError(f"{label} directory does not exist: {src_dir}")
         files = sorted(p for p in src_dir.rglob("*") if p.suffix.lower() in IMG_EXTS)
+        if not files:
+            raise ValueError(f"no images found in {label} directory: {src_dir}")
         random.Random(seed).shuffle(files)
         files = files[:n_per_class]
         if len(files) < n_per_class:
