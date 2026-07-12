@@ -50,13 +50,23 @@ policy; `verified` remains reserved for cryptographic provenance.
 
 **Cross-generator table:** _pending — next run._
 
+**Cross-generator results (trained on SDv1.4 only):**
+
 | test generator | AUROC | bal. acc | notes |
 |---|---|---|---|
-| SDv1.4 (in-dist) | — | 0.922 | this run |
-| Midjourney | | | |
-| ADM | | | |
-| BigGAN | | | |
-| GLIDE | | | |
+| SDv1.4 (in-dist) | 0.974 | 0.919 | home game |
+| Midjourney | 0.842 | 0.706 | vs. 54.9% GenImage ResNet-50 baseline |
+| glide | 0.791 | 0.648 | older diffusion — moderate transfer |
+| BigGAN | 0.580 | 0.522 | GAN family — chance level, expected |
+| ADM | 0.335 | 0.460 | **inverted** signal (see below) |
+| mean (unseen) | 0.637 | 0.584 | |
 
+Transfer degrades with architectural distance from the training generator.
+ADM's sub-0.5 AUROC indicates the learned feature direction (likely dominated
+by SD's VAE-decoder fingerprint) *anti-correlates* on pixel-space diffusion —
+the head ranks ADM fakes as more photo-like than real photos. Balanced
+accuracy lags AUROC off-distribution: ranking transfers better than the
+SDv1.4-fitted threshold/temperature. Together these are the empirical case
+for evidence fusion over any single classifier verdict.
 **Reproduce:** notebook `notebooks/02_train_detector.ipynb` at commit
 `cb68637`, GenImage SDv1.4 archive, seeds in `runs/cb68637/provenance.json`.
