@@ -8,6 +8,12 @@ Implements the first working slice of Steps 1 and 3 of the project plan. Verdict
 the taxonomy `verified | likely | inconclusive | unlikely` with per-signal evidence and
 explicit caveats (watermark/metadata absence is treated as non-evidence).
 
+## Results
+First trained detector (frozen DINOv2 + attention-pooling head): **92.2%**
+in-distribution accuracy on GenImage SDv1.4, ECE 1.7% after calibration —
+cross-generator evaluation in progress. Full run log with caveats and
+reproduction details: [docs/results.md](docs/results.md).
+
 ## Quick start
 
 ```bash
