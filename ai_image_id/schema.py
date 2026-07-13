@@ -15,13 +15,25 @@ class Verdict(str, Enum):
 
 
 class ProvenanceEvidence(BaseModel):
+    # C2PA (cryptographic)
     c2pa_present: bool = False
-    c2pa_valid: Optional[bool] = None
+    c2pa_valid: Optional[bool] = None            # back-compat alias of signature_valid
+    c2pa_signature_valid: Optional[bool] = None  # cryptographically intact
+    c2pa_signer_trusted: Optional[bool] = None   # AND signer on the known trust list
     c2pa_generator: Optional[str] = None
     c2pa_capture_claim: bool = False
+    c2pa_actions: list[str] = Field(default_factory=list)  # e.g. "c2pa.created (Firefly)"
     c2pa_raw: Optional[dict[str, Any]] = None
+    # Generation-parameter chunks (declared, rich — A1111/ComfyUI/NovelAI)
+    generation_params_tool: Optional[str] = None
+    generation_params_model: Optional[str] = None
+    # IPTC DigitalSourceType (declared)
     iptc_digital_source_type: Optional[str] = None
+    iptc_source_category: Optional[str] = None   # ai | ai_composite | synthetic | capture
+    # Weak signals
     software: Optional[str] = None
+    camera_exif_present: bool = False            # coherent camera block (note-tier)
+    camera_exif_fields: int = 0
     ai_metadata_hits: list[str] = Field(default_factory=list)
 
 

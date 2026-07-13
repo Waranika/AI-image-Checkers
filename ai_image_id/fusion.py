@@ -39,14 +39,29 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
             evidence=evidence, notes=notes, sha256=sha256, phash=phash,
         )
 
-    # Rule 2 — declared (unverified) AI metadata
-    declared = bool(prov.iptc_digital_source_type) or bool(prov.ai_metadata_hits)
+    # Rule 2 — declared (unverified) AI metadata. Tiers within the tier:
+    # a full generation recipe (0.85) > IPTC declaration (0.85) > AI-composite
+    # (0.8) > tool-name hit in a field (0.75). All forgeable, all cap at LIKELY.
+    ai_declared = prov.iptc_source_category in ("ai", "ai_composite")
+    declared = bool(prov.generation_params_tool) or ai_declared or bool(prov.ai_metadata_hits)
     if prov.c2pa_present and prov.c2pa_valid is False:
         notes.append("C2PA manifest present but signature INVALID — treat with suspicion")
+    if prov.c2pa_signature_valid and prov.c2pa_signer_trusted is False:
+        notes.append("C2PA signature intact but signer not on the known trust list")
     if declared:
-        hits = [prov.iptc_digital_source_type or ""] + prov.ai_metadata_hits
-        notes.append("declared AI metadata: " + "; ".join(h for h in hits if h))
-        confidence = 0.85 if prov.iptc_digital_source_type else 0.75
+        if prov.generation_params_tool:
+            model = f", model: {prov.generation_params_model}" if prov.generation_params_model else ""
+            notes.append(f"embedded generation parameters ({prov.generation_params_tool}{model})")
+            confidence = 0.85
+        elif prov.iptc_source_category == "ai_composite":
+            notes.append("declared AI-edited composite (IPTC compositeWithTrainedAlgorithmicMedia)")
+            confidence = 0.8
+        elif prov.iptc_source_category == "ai":
+            notes.append(f"declared AI metadata: IPTC {prov.iptc_digital_source_type}")
+            confidence = 0.85
+        else:
+            notes.append("declared AI metadata: " + "; ".join(prov.ai_metadata_hits))
+            confidence = 0.75
         return AnalysisResult(
             ai_verdict=Verdict.LIKELY, confidence=confidence,
             evidence=evidence, notes=notes, sha256=sha256, phash=phash,
@@ -93,6 +108,13 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
         notes.append(
             f"valid C2PA manifest from non-AI tool ({prov.c2pa_generator}); no AI signals"
         )
+
+    # Note-tier human-side hints — never move a verdict alone (forgeable);
+    # reserved as corroborators for PRNU (phase 3).
+    if prov.iptc_source_category == "capture":
+        notes.append(f"declared capture source (IPTC {prov.iptc_digital_source_type}) — declared, not proof")
+    if prov.camera_exif_present:
+        notes.append(f"coherent camera EXIF block ({prov.camera_exif_fields} fields) — weak, forgeable")
 
     # Rule 3c — spectral heuristic alone is a single weak signal: note it, never
     # let it flip the verdict without agreement from another signal.
