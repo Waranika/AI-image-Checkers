@@ -183,23 +183,57 @@ def _check_stable_signature_bzh(rgb: np.ndarray) -> list[WatermarkEvidence]:
         )]
 
 
+# ──────────────── detector 4: SynthID CNN ensemble (learned surrogate) ──
+
+def _check_synthid_cnn(rgb: np.ndarray) -> list[WatermarkEvidence]:
+    """Detect SynthID watermark presence via a learned CNN ensemble.
+
+    Used by: Google Gemini/Imagen, OpenAI GPT-Image-2 (since May 2026).
+    NOT a cryptographic verifier — a surrogate binary classifier that detects
+    the watermark's statistical signature. Reliable on in-distribution images;
+    can be fooled by adversarial perturbation or OOD inputs.
+    Fusion tier: `likely` (not `verified`) — learned detectors are not proof.
+    Requires: torch, torchvision. Weights (~140 MB) auto-download on first use.
+    Source: github.com/newideas99/gpt-image-synthid-detector (MIT license).
+    """
+    try:
+        import torch  # noqa: F401 — just checking availability
+    except ImportError:
+        return [WatermarkEvidence(
+            scheme="synthid-cnn", applicable=False,
+            notes="torch not installed (needed for SynthID CNN detector)",
+        )]
+
+    try:
+        from .synthid_cnn import detect_synthid
+        device = "cuda" if __import__("torch").cuda.is_available() else "cpu"
+        detected, ensemble_p, per_model = detect_synthid(rgb, device=device)
+        model_detail = " | ".join(f"{a}={p:.3f}" for a, p in per_model.items())
+        return [WatermarkEvidence(
+            scheme="synthid-cnn",
+            detected=detected,
+            bit_accuracy=ensemble_p,  # repurposed: ensemble P(watermarked)
+            notes=f"learned surrogate detector, P(wm)={ensemble_p:.3f} [{model_detail}]"
+                  if detected else
+                  f"not detected, P(wm)={ensemble_p:.3f}",
+        )]
+    except Exception as exc:
+        return [WatermarkEvidence(
+            scheme="synthid-cnn", applicable=False,
+            notes=f"detector error: {type(exc).__name__}: {str(exc)[:150]}",
+        )]
+
+
 # ────────────────────────────────────── closed schemes (documented) ──
 
 def _note_closed_schemes() -> list[WatermarkEvidence]:
-    """Schemes with no public decoder — documented, not detected.
-
-    SynthID (Google/DeepMind): used by Gemini, Imagen, and since May 2026 by
-    OpenAI GPT-Image-2. No public detector API. M1 can report its presence
-    when declared in a C2PA manifest (action: c2pa.watermarked.unbound).
-    Verify manually: Gemini app or openai.com/verify.
+    """Schemes with no public decoder or surrogate — documented, not detected.
 
     Meta invisible watermark: no public decoder or documentation.
+    (SynthID is now covered by the CNN surrogate above; the official
+    cryptographic verifier remains oracle-only at openai.com/verify.)
     """
     return [
-        WatermarkEvidence(
-            scheme="synthid", applicable=False,
-            notes="no public detector; verify via Gemini app or openai.com/verify",
-        ),
         WatermarkEvidence(
             scheme="meta-invisible", applicable=False,
             notes="no public decoder; Meta's proprietary scheme",
@@ -212,6 +246,13 @@ def _note_closed_schemes() -> list[WatermarkEvidence]:
 def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     """Run all available watermark decoders and return combined evidence.
 
+    Five detectors, in order of ecosystem reach:
+      1. DWT-DCT         — SD 1.x/2.x/SDXL default (known payloads)
+      2. TrustMark       — Adobe Firefly / Durable Content Credentials
+      3. Stable Sig. BZH — SDXL-turbo IMATAG builds (zero-bit)
+      4. SynthID CNN      — Google/OpenAI (learned surrogate, not cryptographic)
+      5. (documented)     — Meta invisible (no decoder exists)
+
     Each decoder is independent: a missing optional dependency makes that
     decoder report applicable=False, not crash. The fusion engine treats
     any detected watermark as strong evidence; absence across all decoders
@@ -223,6 +264,7 @@ def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     results.extend(_check_dwtdct(rgb))               # 1. SD invisible-watermark
     results.extend(_check_trustmark(rgb))             # 2. Adobe TrustMark
     results.extend(_check_stable_signature_bzh(rgb))  # 3. Stable Signature BZH
-    results.extend(_note_closed_schemes())            # 4. documented-only
+    results.extend(_check_synthid_cnn(rgb))           # 4. SynthID CNN surrogate
+    results.extend(_note_closed_schemes())            # 5. documented-only
 
     return results
