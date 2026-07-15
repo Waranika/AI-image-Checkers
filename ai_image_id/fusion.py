@@ -30,10 +30,23 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
             evidence=evidence, notes=notes, sha256=sha256, phash=phash,
         )
     if detected_wm:
-        notes.append(
-            f"invisible watermark matched '{detected_wm.matched_payload}' "
-            f"(bit accuracy {detected_wm.bit_accuracy})"
-        )
+        if detected_wm.scheme == "dwtDct":
+            notes.append(
+                f"SD invisible watermark matched '{detected_wm.matched_payload}' "
+                f"(bit accuracy {detected_wm.bit_accuracy})"
+            )
+        elif detected_wm.scheme == "trustmark":
+            notes.append(
+                f"Adobe TrustMark watermark detected "
+                f"(payload: {detected_wm.matched_payload})"
+            )
+        elif detected_wm.scheme == "stable-signature-bzh":
+            notes.append(
+                f"Stable Signature watermark detected "
+                f"(p(watermarked)={detected_wm.bit_accuracy})"
+            )
+        else:
+            notes.append(f"watermark detected: {detected_wm.scheme}")
         return AnalysisResult(
             ai_verdict=Verdict.VERIFIED, confidence=0.95,
             evidence=evidence, notes=notes, sha256=sha256, phash=phash,
