@@ -242,13 +242,29 @@ def _check_synthid_cnn(rgb: np.ndarray) -> list[WatermarkEvidence]:
 # ────────────────────────────────────── closed schemes (documented) ──
 
 def _note_closed_schemes() -> list[WatermarkEvidence]:
-    """Schemes with no public decoder or surrogate — documented, not detected.
+    """Schemes with no reliable public decoder — documented, not detected.
+
+    SynthID (Google/DeepMind): used by Gemini/Imagen and, since May 2026, by
+    OpenAI GPT-Image-2. Independent verification is cryptographically
+    impossible — detection requires Google's private keys. Official paths:
+    the SynthID Detector portal / Gemini app (manual upload), and a Content
+    Detection API on Google Cloud that is in partner-only preview (2026).
+    A third-party CNN surrogate (synthid_cnn.py, from an unaudited repo
+    claiming 0.97 accuracy) was integrated and evaluated here: it fired on
+    ALL images tested — AI-generated, personal photos, synthetic fixtures —
+    at P=0.65-1.00. A shortcut-learning classifier, not a watermark detector.
+    Rejected; kept in-repo as a cautionary tale. M1 reports SynthID presence
+    when declared in C2PA manifests (action: c2pa.watermarked.unbound).
 
     Meta invisible watermark: no public decoder or documentation.
-    (SynthID is now covered by the CNN surrogate above; the official
-    cryptographic verifier remains oracle-only at openai.com/verify.)
     """
     return [
+        WatermarkEvidence(
+            scheme="synthid", applicable=False,
+            notes="independent detection impossible (needs Google's keys); CNN "
+                  "surrogate evaluated and rejected (fires on all images); "
+                  "official API partner-only; verify via Gemini app or openai.com/verify",
+        ),
         WatermarkEvidence(
             scheme="meta-invisible", applicable=False,
             notes="no public decoder; Meta's proprietary scheme",
@@ -261,12 +277,12 @@ def _note_closed_schemes() -> list[WatermarkEvidence]:
 def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     """Run all available watermark decoders and return combined evidence.
 
-    Five detectors, in order of ecosystem reach:
+    Three active decoders, in order of ecosystem reach:
       1. DWT-DCT         — SD 1.x/2.x/SDXL default (known payloads)
-      2. TrustMark       — Adobe Firefly / Durable Content Credentials
+      2. TrustMark P/Q/B — Adobe Content Authenticity (Durable Content Credentials)
       3. Stable Sig. BZH — SDXL-turbo IMATAG builds (zero-bit)
-      4. SynthID CNN      — Google/OpenAI (learned surrogate, not cryptographic)
-      5. (documented)     — Meta invisible (no decoder exists)
+    Plus documented-only schemes with no reliable public decoder:
+      SynthID (Google/OpenAI) and Meta invisible — see _note_closed_schemes.
 
     Each decoder is independent: a missing optional dependency makes that
     decoder report applicable=False, not crash. The fusion engine treats
@@ -277,9 +293,12 @@ def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     results: list[WatermarkEvidence] = []
 
     results.extend(_check_dwtdct(rgb))               # 1. SD invisible-watermark
-    results.extend(_check_trustmark(rgb))             # 2. Adobe TrustMark
+    results.extend(_check_trustmark(rgb))             # 2. Adobe TrustMark (P/Q/B)
     results.extend(_check_stable_signature_bzh(rgb))  # 3. Stable Signature BZH
-    results.extend(_check_synthid_cnn(rgb))           # 4. SynthID CNN surrogate
-    results.extend(_note_closed_schemes())            # 5. documented-only
+    results.extend(_note_closed_schemes())            # 4. documented-only
+    # NOTE: _check_synthid_cnn (synthid_cnn.py) was evaluated and REJECTED —
+    # it fires on ALL images (AI, personal photos, fixtures) — see the
+    # _note_closed_schemes docstring. Kept in the repo as a documented
+    # cautionary tale about unaudited third-party checkpoints; not called.
 
     return results
