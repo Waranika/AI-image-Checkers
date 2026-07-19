@@ -32,7 +32,7 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
     if detected_wm:
         # Cryptographic / payload-verifying decoders → verified (0.95)
         # Learned surrogate detectors → likely (0.88) — not cryptographic proof
-        is_learned = detected_wm.scheme == "stable-signature-bzh"
+        is_learned = detected_wm.scheme in ("synthid-cnn", "stable-signature-bzh")
 
         if detected_wm.scheme == "dwtDct":
             notes.append(
@@ -48,6 +48,11 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
             notes.append(
                 f"Stable Signature watermark detected "
                 f"(p(watermarked)={detected_wm.bit_accuracy})"
+            )
+        elif detected_wm.scheme == "synthid-cnn":
+            notes.append(
+                f"SynthID watermark detected by learned surrogate "
+                f"(ensemble P(wm)={detected_wm.bit_accuracy})"
             )
         else:
             notes.append(f"watermark detected: {detected_wm.scheme}")
