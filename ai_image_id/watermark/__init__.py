@@ -91,18 +91,25 @@ def _check_dwtdct(rgb: np.ndarray) -> list[WatermarkEvidence]:
 
 # ──────────────────────────────────────── decoder 2: TrustMark (Adobe) ──
 
-_TRUSTMARK_INSTANCE = None  # cached across calls (model loads once)
+_TRUSTMARK_CACHE: dict = {}   # model_type -> TrustMark instance (each loads once)
+
+# TrustMark ships several model variants; they are NOT cross-compatible — a
+# decoder for one variant cannot read another's watermark. Adobe's Content
+# Authenticity app embeds with "P" (confirmed via manifest soft-binding
+# alg=com.adobe.trustmark.P), while other integrations use Q or B. We must try
+# each, or we get false negatives on variants we skip.
+TRUSTMARK_VARIANTS = ("P", "Q", "B")
 
 
 def _check_trustmark(rgb: np.ndarray) -> list[WatermarkEvidence]:
     """Decode Adobe TrustMark watermark (Durable Content Credentials).
 
-    Used by: Adobe Firefly. Designed to survive JPEG recompression, resizing,
-    and metadata stripping — the transports that kill C2PA manifests.
-    Requires: `pip install trustmark` (MIT license, ~50 MB model download on
-    first use, runs on CPU).
+    Used by: Adobe Content Authenticity app (Durable Content Credentials),
+    Adobe Firefly via that pipeline. Designed to survive JPEG recompression,
+    resizing, and metadata stripping — the transports that kill C2PA manifests.
+    Tries all model variants (P/Q/B) since they are mutually incompatible.
+    Requires: `pip install trustmark` (~50 MB per variant on first use, CPU-ok).
     """
-    global _TRUSTMARK_INSTANCE
     try:
         from trustmark import TrustMark
     except ImportError:
@@ -111,22 +118,30 @@ def _check_trustmark(rgb: np.ndarray) -> list[WatermarkEvidence]:
             notes="trustmark package not installed (pip install trustmark)",
         )]
 
-    try:
-        if _TRUSTMARK_INSTANCE is None:
-            _TRUSTMARK_INSTANCE = TrustMark(verbose=False, model_type="Q")
-        pil_img = Image.fromarray(rgb)
-        wm_secret, wm_present, wm_schema = _TRUSTMARK_INSTANCE.decode(pil_img)
-        return [WatermarkEvidence(
-            scheme="trustmark",
-            detected=bool(wm_present),
-            matched_payload=wm_secret if wm_present else None,
-            notes=f"schema={wm_schema}" if wm_present else None,
-        )]
-    except Exception as exc:
+    pil_img = Image.fromarray(rgb)
+    last_error = None
+    for variant in TRUSTMARK_VARIANTS:
+        try:
+            if variant not in _TRUSTMARK_CACHE:
+                _TRUSTMARK_CACHE[variant] = TrustMark(verbose=False, model_type=variant)
+            wm_secret, wm_present, wm_schema = _TRUSTMARK_CACHE[variant].decode(pil_img)
+            if wm_present:
+                return [WatermarkEvidence(
+                    scheme=f"trustmark-{variant}",
+                    detected=True,
+                    matched_payload=wm_secret,
+                    notes=f"variant={variant}, schema={wm_schema}",
+                )]
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+
+    if last_error:
         return [WatermarkEvidence(
             scheme="trustmark", applicable=False,
-            notes=f"decoder error: {type(exc).__name__}: {str(exc)[:150]}",
+            notes=f"decoder error: {last_error}",
         )]
+    return [WatermarkEvidence(scheme="trustmark", detected=False,
+                              notes="no TrustMark watermark found (tried P/Q/B)")]
 
 
 # ──────────────────────── decoder 3: Stable Signature BZH (Meta/IMATAG) ──

@@ -39,7 +39,7 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
                 f"SD invisible watermark matched '{detected_wm.matched_payload}' "
                 f"(bit accuracy {detected_wm.bit_accuracy})"
             )
-        elif detected_wm.scheme == "trustmark":
+        elif detected_wm.scheme.startswith("trustmark"):
             notes.append(
                 f"Adobe TrustMark watermark detected "
                 f"(payload: {detected_wm.matched_payload})"
