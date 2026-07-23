@@ -26,3 +26,6 @@ all = ["ai-image-id[api,watermarks,dev]"]
 
 [tool.setuptools.packages.find]
 include = ["ai_image_id*"]
+
+[tool.ruff]
+target-version = "py312"
