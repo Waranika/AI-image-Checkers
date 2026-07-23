@@ -251,3 +251,72 @@ GenImage SDv1.4 archive, seeds in `runs/cb68637/provenance.json`.
   signal?).
 - M4 interpretability set (score histograms, attention maps, perturbation
   sweeps — notebook 06, scoped).
+
+---
+
+## M4 — Mixed-generator ablation: run `8cf8026_mixed` (notebook 02, 2026-07-23)
+
+### Setup
+
+Same architecture as `cb68637` (frozen DINOv2 ViT-S/14 + attention-pooling
+head). Training pool: SDv1.4 train embeddings (5K/class, n_aug=2) **plus**
+val-slice embeddings from 4 additional generators (Midjourney, ADM, BigGAN,
+glide — 1K/class each, n_aug=0). Total: 38K samples. Same optimizer, 5
+epochs, T4.
+
+### Side-by-side comparison
+
+| generator | SDv1.4-only AUROC | Mixed AUROC | SDv1.4-only bal.acc | Mixed bal.acc |
+|---|---|---|---|---|
+| SDv1.4 (in-dist) | 0.973 | 0.975 | 0.923 | 0.919 |
+| Midjourney | 0.832 | 0.985 | 0.700 | 0.925 |
+| glide | 0.776 | 0.991 | 0.649 | 0.947 |
+| BigGAN | 0.560 | 0.997 | 0.524 | 0.976 |
+| ADM | 0.345 | 0.997 | 0.453 | 0.977 |
+| **mean** | **0.697** | **0.989** | **0.650** | **0.949** |
+
+Calibration: temperature 2.63 → 1.82 (less overconfident with diversity);
+ECE post-calibration 0.013 → 0.020.
+
+### ⚠ Critical caveat — train/eval overlap
+
+**The mixed numbers are inflated by data leakage.** The training pool
+includes val-slice embeddings from the eval generators (1K/class), and the
+eval uses the *same* embeddings — the head has seen those exact feature
+vectors during training. Near-perfect AUROC on data you trained on is
+expected, not impressive. A clean evaluation requires either:
+- **held-out generators**: train on 4, eval on the other 4 (zero-shot); or
+- **disjoint splits**: extract both train/ and val/ from each generator,
+  train on train/, eval on val/ (separate populations from the same
+  distribution).
+
+Neither has been done yet. The current numbers demonstrate that the head
+*can learn* each generator's artifacts (not a given — the SDv1.4-only head
+couldn't learn ADM's) but do not measure true zero-shot transfer.
+
+### What IS genuine (leakage-independent)
+
+1. **The ADM inversion repair.** AUROC 0.345 → 0.997 proves the old head's
+   anti-correlation was SD-specificity (VAE-fingerprint), not ADM being
+   undetectable. This conclusion holds regardless of overlap.
+2. **No catastrophic forgetting.** SDv1.4 in-distribution performance held
+   at 0.975 despite training on 4 additional generators — multi-task
+   learning on a 500K-param head without home-field degradation.
+3. **Calibration improved.** Temperature closer to 1.0 with diverse
+   training — the head's logits are naturally more measured with exposure
+   to varied distributions.
+
+### Next step to resolve the leakage
+
+The cleanest fix: **leave-one-out cross-validation.** Train on 4 generators,
+eval on the held-out 5th, rotate. Five training runs, each producing one
+genuine zero-shot row. The infrastructure exists (the extraction loop
+persists to Drive; the training cell accepts any pooled shard directory).
+The result is a 5-row table where every number is on data the head never
+saw — the honest version of the table above, with a clear expectation
+that numbers will be lower but still far above the SDv1.4-only baseline.
+
+### Reproduce
+
+Notebook `notebooks/02_train_detector.ipynb` at commit `8cf8026`,
+checkpoint in `runs/8cf8026_mixed/`.
