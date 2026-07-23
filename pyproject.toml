@@ -29,3 +29,7 @@ include = ["ai_image_id*"]
 
 [tool.ruff]
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["BLE001"]
