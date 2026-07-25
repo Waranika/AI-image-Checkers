@@ -15,7 +15,6 @@ set, the module reports "no API key configured" and returns gracefully.
 """
 from __future__ import annotations
 
-import io
 import os
 import tempfile
 from dataclasses import dataclass
@@ -64,7 +63,7 @@ def _reverse_search(image_path: Path, max_results: int = 10) -> list[WebMatch]:
 
     # Try the google-cloud-vision library (service account auth)
     try:
-        from google.cloud import vision
+        from google.cloud import vision # noqa: F401
         return _search_with_client(image_path, max_results)
     except ImportError:
         return []
