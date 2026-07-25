@@ -320,3 +320,102 @@ that numbers will be lower but still far above the SDv1.4-only baseline.
 
 Notebook `notebooks/02_train_detector.ipynb` at commit `8cf8026`,
 checkpoint in `runs/8cf8026_mixed/`.
+
+---
+
+## M4 — Zero-shot evaluation: Synthbuster (notebook 05, 2026-07-25)
+
+### The honest test
+
+Synthbuster (Bammey, 2023) — 9 generators × 500 images, none seen during
+training. Real images: 500 ImageNet photos from GenImage val/nature
+(independently extracted, not from Synthbuster which ships fakes only).
+Both heads scored on identical data; no retraining, no threshold tuning.
+
+| generator | SDv1.4-only AUROC | Mixed AUROC | zero-shot? |
+|---|---|---|---|
+| dalle2 | 0.706 | 0.764 | ✓ genuine |
+| dalle3 | 0.912 | 0.919 | ✓ genuine |
+| firefly | 0.721 | 0.711 | ✓ genuine |
+| glide | 0.806 | 0.925 | mixed-seen |
+| midjourney-v5 | 0.764 | 0.826 | ✓ genuine |
+| stable-diffusion-1-3 | 0.888 | 0.876 | cross-dataset* |
+| stable-diffusion-1-4 | 0.890 | 0.870 | cross-dataset* |
+| stable-diffusion-2 | 0.821 | 0.878 | ✓ genuine |
+| stable-diffusion-xl | 0.832 | 0.884 | ✓ genuine |
+| **mean** | **0.815** | **0.850** | |
+| **mean (zero-shot only)** | **0.816** | **0.841** | |
+
+\* same generator as training, different dataset/prompts — cross-dataset
+generalization check, not zero-shot.
+
+### Key findings
+
+1. **Transfer degrades with architectural distance.** DALL·E 3 (diffusion,
+   architecturally close to SD): 0.912. Firefly (proprietary, most distant):
+   0.711. The gradient is the finding — it maps the learned feature space's
+   reach.
+2. **Firefly is the honest boundary.** 0.71 is above chance but weak — the
+   head has no exposure to Adobe's generation artifacts. Mixed training
+   didn't help (0.721→0.711) because the added generators (Midjourney/ADM/
+   BigGAN/glide) don't share Firefly's architecture either. Prediction:
+   adding Firefly samples to training would fix this specific blind spot.
+3. **Cross-dataset check passed.** SD 1.3/1.4 from Synthbuster (different
+   prompts, different researchers) scored 0.888/0.890 — close to the
+   GenImage in-distribution 0.919, confirming the head learned generator
+   artifacts, not GenImage-specific dataset content.
+4. **Mixed training helps on seen generators but zero-shot gain is modest.**
+   Mean zero-shot improved 0.816→0.841 — real but not dramatic. The
+   inflated numbers from the leakage test (0.989 mean) are confirmed as
+   overstated; the honest gain from diversity is ~2.5 points of AUROC.
+
+---
+
+## M4 — Transport resilience (notebook 05, 2026-07-25)
+
+ChatGPT/GPT-Image-2 PNG through 7 transports, both heads:
+
+| transport | p(fake) SDv1.4 | p(fake) mixed | drift |
+|---|---|---|---|
+| original | 0.987 | 0.984 | — |
+| JPEG re-save Q92 | 0.983 | 0.984 | 0.000 |
+| screenshot | 0.987 | 0.984 | 0.000 |
+| messenger (½-resize + Q70)* | 0.980 | 0.979 | 0.005 |
+| exiftool -all= | 0.987 | 0.984 | 0.000 |
+| crop (50px border) | 0.995 | 0.992 | 0.008 |
+| PIL re-encode | 0.987 | 0.984 | 0.000 |
+
+**Maximum drift: 0.008.** The classifier score is effectively invariant
+across all seven transports, including the messenger row where both C2PA
+(M1) and TrustMark (M2) failed.
+
+### The complete M1 × M2 × M4 composite — the project's thesis
+
+| transport | C2PA (M1) | TrustMark (M2) | Classifier (M4) | covered |
+|---|---|---|---|---|
+| original | ✓ | ✓ | 0.984 | ✓ |
+| re-save | · | ✓ | 0.984 | ✓ |
+| screenshot | · | ✓ | 0.984 | ✓ |
+| messenger* | · | · | **0.979** | **✓** |
+| exiftool-strip | ✓ | ✓ | 0.984 | ✓ |
+| crop | · | ✓ | 0.992 | ✓ |
+| re-encode | · | ✓ | 0.984 | ✓ |
+
+No single module covers everything; their union covers **7/7 measured
+transports.** Provenance proves origin on pristine files; the durable
+watermark carries detection through reprocessing; the classifier fills
+the last gap (aggressive resize + recompression) where metadata and
+watermarks both die. Evidence fusion, measured across three independent
+signal families.
+
+\* synthetic proxy (PIL Q70 + ½ resize); real-platform validation pending.
+
+---
+
+## Updated pending measurements
+
+- Real-platform transport hops (WhatsApp / Instagram / Telegram).
+- M4 interpretability: score histograms, attention maps, perturbation
+  sweeps (notebook 06 — scoped, not started).
+- Firefly-inclusive mixed training (would the 0.71 boundary move?).
+- Full train/-split run at 20K+/class (streaming loader ready).
