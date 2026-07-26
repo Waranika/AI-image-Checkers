@@ -388,7 +388,7 @@ def trace_provenance(
     # 2b. Page-context analysis — titles, URLs, Google labels
     context_hit, context_signals = _check_page_context(search)
     result["ai_context_match"] = context_hit
-    MAX_FETCH_ATTEMPTS = 3  
+    MAX_FETCH_ATTEMPTS = 3
     if context_hit:
         result["notes"].append(
             "web context suggests AI origin "
