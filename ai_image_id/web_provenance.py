@@ -89,6 +89,7 @@ def _check_page_context(
     signals = []
     # Google's best guess (strongest — Google's own opinion)
     for label in search.best_guess_labels:
+        print(label)
         label_lower = label.lower()
         for kw in AI_CONTEXT_KEYWORDS:
             if kw in label_lower:
