@@ -78,33 +78,32 @@ AI_CONTEXT_KEYWORDS = {
 def _check_page_context(
     search: SearchResult,
 ) -> tuple[bool, list[str]]:
-    """Check if page titles, URLs, or Google's labels suggest AI origin.
-
-    Scans text the API already returned — no extra requests, no page
-    fetching, no HTML parsing. Three independent sources of context:
-      1. bestGuessLabels — Google's own classification of the image
-      2. pageTitle — what editors titled the page the image appears on
-      3. URL slugs — often contain descriptive keywords
-    """
     signals = []
-    # Google's best guess (strongest — Google's own opinion)
     for label in search.best_guess_labels:
-        print(label)
         label_lower = label.lower()
         for kw in AI_CONTEXT_KEYWORDS:
             if kw in label_lower:
                 signals.append(f"google label: '{label}'")
                 break
 
-    # Page titles and URL slugs
+    # Scan page matches FIRST (they have titles + descriptive URLs)
+    # then image matches (bare CDN links, rarely useful for context)
     seen_domains: set[str] = set()
-    for match in search.matches:
+    # Sort: entries with page_title first
+    ordered = sorted(
+        search.matches,
+        key=lambda m: (m.page_title is None, m.page_url is None),
+    )
+    for match in ordered:
         if match.domain in seen_domains:
-            continue  # one signal per domain
+            continue
         text = ""
         if match.page_title:
             text += " " + match.page_title.lower()
-        if match.url:
+        if match.page_url:
+            slug = match.page_url.lower().replace("-", " ").replace("_", " ")
+            text += " " + slug
+        if match.url and match.url != match.page_url:
             slug = match.url.lower().replace("-", " ").replace("_", " ")
             text += " " + slug
         for kw in AI_CONTEXT_KEYWORDS:
