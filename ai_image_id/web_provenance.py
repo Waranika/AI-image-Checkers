@@ -5,6 +5,13 @@ asks the internet: "has this image been seen before, and does an earlier copy
 still carry provenance?" If yes, the verdict is inherited from the upstream
 copy through a documented chain.
 
+Three layers of signal from one API call (cheapest first):
+  1. Page-context keywords — Google's bestGuessLabels + page titles + URL
+     slugs scanned for AI-related terms ("deepfake", "ai generated", etc.)
+  2. Domain classification — known AI galleries vs. stock photo sites
+  3. Upstream re-analysis — fetch the matched image, run the full pipeline,
+     inherit a stronger verdict if the upstream copy has intact provenance
+
 Uses Google Cloud Vision's WEB_DETECTION (1,000 free requests/month) by
 default. The search backend is a single function — swap it for TinEye,
 SerpApi, or Bing by replacing `_reverse_search`.
@@ -15,7 +22,6 @@ set, the module reports "no API key configured" and returns gracefully.
 """
 from __future__ import annotations
 
-import io
 import os
 import tempfile
 from dataclasses import dataclass
@@ -54,7 +60,7 @@ class WebMatch:
 class SearchResult:
     """Everything the reverse search returns in one object."""
     matches: list[WebMatch]
-    best_guess_labels: list[str]   # Google's own description of the image
+    best_guess_labels: list[str]   # Google's own description
 
 
 # Keywords in page titles, URLs, or bestGuessLabels that suggest AI origin.
@@ -69,7 +75,9 @@ AI_CONTEXT_KEYWORDS = {
 }
 
 
-def _check_page_context(search: SearchResult) -> tuple[bool, list[str]]:
+def _check_page_context(
+    search: SearchResult,
+) -> tuple[bool, list[str]]:
     """Check if page titles, URLs, or Google's labels suggest AI origin.
 
     Scans text the API already returned — no extra requests, no page
@@ -79,7 +87,7 @@ def _check_page_context(search: SearchResult) -> tuple[bool, list[str]]:
       3. URL slugs — often contain descriptive keywords
     """
     signals = []
-    # Check Google's best guess first (strongest — it's Google's own opinion)
+    # Google's best guess (strongest — Google's own opinion)
     for label in search.best_guess_labels:
         label_lower = label.lower()
         for kw in AI_CONTEXT_KEYWORDS:
@@ -87,22 +95,25 @@ def _check_page_context(search: SearchResult) -> tuple[bool, list[str]]:
                 signals.append(f"google label: '{label}'")
                 break
 
-    # Check page titles and URL slugs
-    seen_domains = set()
-    for m in search.matches:
-        if m.domain in seen_domains:
-            continue  # one signal per domain, not per URL
+    # Page titles and URL slugs
+    seen_domains: set[str] = set()
+    for match in search.matches:
+        if match.domain in seen_domains:
+            continue  # one signal per domain
         text = ""
-        if m.page_title:
-            text += " " + m.page_title.lower()
-        if m.url:
-            # URL slugs: replace separators with spaces for keyword matching
-            text += " " + m.url.lower().replace("-", " ").replace("_", " ")
+        if match.page_title:
+            text += " " + match.page_title.lower()
+        if match.url:
+            slug = match.url.lower().replace("-", " ").replace("_", " ")
+            text += " " + slug
         for kw in AI_CONTEXT_KEYWORDS:
             if kw in text:
-                source = f"title: '{m.page_title}'" if m.page_title and kw in m.page_title.lower() else f"URL at {m.domain}"
+                if match.page_title and kw in match.page_title.lower():
+                    source = f"title: '{match.page_title}'"
+                else:
+                    source = f"URL at {match.domain}"
                 signals.append(source)
-                seen_domains.add(m.domain)
+                seen_domains.add(match.domain)
                 break
 
     return bool(signals), signals
@@ -110,7 +121,9 @@ def _check_page_context(search: SearchResult) -> tuple[bool, list[str]]:
 
 # ─────────────────────────────── search backend: Google Cloud Vision ──
 
-def _reverse_search(image_path: Path, max_results: int = 10) -> SearchResult:
+def _reverse_search(
+    image_path: Path, max_results: int = 10,
+) -> SearchResult:
     """Reverse image search via Google Cloud Vision WEB_DETECTION.
 
     Returns matches + bestGuessLabels. Swap this function to change the
@@ -130,28 +143,38 @@ def _reverse_search(image_path: Path, max_results: int = 10) -> SearchResult:
         return SearchResult(matches=[], best_guess_labels=[])
 
 
-def _search_with_api_key(image_path: Path, api_key: str,
-                         max_results: int) -> SearchResult:
+def _search_with_api_key(
+    image_path: Path, api_key: str, max_results: int,
+) -> SearchResult:
     """REST API call with an API key (no SDK needed)."""
     import base64
 
     img_bytes = Path(image_path).read_bytes()
     body = {
         "requests": [{
-            "image": {"content": base64.b64encode(img_bytes).decode()},
-            "features": [{"type": "WEB_DETECTION", "maxResults": max_results}],
+            "image": {
+                "content": base64.b64encode(img_bytes).decode(),
+            },
+            "features": [{
+                "type": "WEB_DETECTION",
+                "maxResults": max_results,
+            }],
         }]
     }
     resp = requests.post(
-        f"https://vision.googleapis.com/v1/images:annotate?key={api_key}",
-        json=body, timeout=30,
+        "https://vision.googleapis.com/v1/images:annotate"
+        f"?key={api_key}",
+        json=body,
+        timeout=30,
     )
     resp.raise_for_status()
     web = resp.json()["responses"][0].get("webDetection", {})
     return _parse_vision_response(web)
 
 
-def _search_with_client(image_path: Path, max_results: int) -> SearchResult:
+def _search_with_client(
+    image_path: Path, max_results: int,
+) -> SearchResult:
     """google-cloud-vision SDK (service account credentials)."""
     from google.cloud import vision
 
@@ -160,16 +183,24 @@ def _search_with_client(image_path: Path, max_results: int) -> SearchResult:
     image = vision.Image(content=content)
     response = client.web_detection(image=image)
     web = response.web_detection
-    labels = [l.label for l in (web.best_guess_labels or [])]
+    labels = [
+        entry.label
+        for entry in (web.best_guess_labels or [])
+    ]
     matches = []
     for match in (web.full_matching_images or [])[:max_results]:
         domain = urlparse(match.url).netloc.lstrip("www.")
         matches.append(WebMatch(url=match.url, domain=domain))
     for page in (web.pages_with_matching_images or [])[:max_results]:
         domain = urlparse(page.url).netloc.lstrip("www.")
+        title = None
+        if hasattr(page, "page_title"):
+            title = page.page_title
         matches.append(WebMatch(
-            url=page.url, page_url=page.url, domain=domain,
-            page_title=page.page_title if hasattr(page, "page_title") else None,
+            url=page.url,
+            page_url=page.url,
+            domain=domain,
+            page_title=title,
             score=page.score if hasattr(page, "score") else 0.0,
         ))
     return SearchResult(matches=matches, best_guess_labels=labels)
@@ -182,21 +213,24 @@ def _parse_vision_response(web: dict) -> SearchResult:
       - bestGuessLabels: Google's own description of the image
       - pageTitle: the <title> of each page containing the image
       - URL: the page URL (slugs often contain descriptive keywords)
-    All three are used by _check_page_context to detect AI-related signals
-    without any additional API calls or page fetching.
+    All used by _check_page_context — zero additional API calls.
     """
-    labels = [entry.get("label", "")
-              for entry in web.get("bestGuessLabels", [])]
+    labels = [
+        entry.get("label", "")
+        for entry in web.get("bestGuessLabels", [])
+    ]
     matches = []
-    for m in web.get("fullMatchingImages", []):
-        domain = urlparse(m["url"]).netloc.lstrip("www.")
-        matches.append(WebMatch(url=m["url"], domain=domain))
-    for p in web.get("pagesWithMatchingImages", []):
-        domain = urlparse(p["url"]).netloc.lstrip("www.")
+    for item in web.get("fullMatchingImages", []):
+        domain = urlparse(item["url"]).netloc.lstrip("www.")
+        matches.append(WebMatch(url=item["url"], domain=domain))
+    for page in web.get("pagesWithMatchingImages", []):
+        domain = urlparse(page["url"]).netloc.lstrip("www.")
         matches.append(WebMatch(
-            url=p["url"], page_url=p["url"], domain=domain,
-            page_title=p.get("pageTitle"),
-            score=p.get("score", 0.0),
+            url=page["url"],
+            page_url=page["url"],
+            domain=domain,
+            page_title=page.get("pageTitle"),
+            score=page.get("score", 0.0),
         ))
     return SearchResult(matches=matches, best_guess_labels=labels)
 
@@ -204,10 +238,12 @@ def _parse_vision_response(web: dict) -> SearchResult:
 # ──────────────────────────────────────────── fetch a remote image ──
 
 def _fetch_image(url: str, timeout: int = 15) -> Path | None:
-    """Download an image URL to a temp file. Returns the path or None."""
+    """Download an image URL to a temp file. Returns path or None."""
     try:
-        resp = requests.get(url, timeout=timeout, stream=True,
-                            headers={"User-Agent": "ai-image-id/0.1"})
+        resp = requests.get(
+            url, timeout=timeout, stream=True,
+            headers={"User-Agent": "ai-image-id/0.1"},
+        )
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
         if "image" not in content_type and "octet" not in content_type:
@@ -221,7 +257,6 @@ def _fetch_image(url: str, timeout: int = 15) -> Path | None:
         for chunk in resp.iter_content(8192):
             tmp.write(chunk)
         tmp.close()
-        # Verify it's a valid image
         Image.open(tmp.name).verify()
         return Path(tmp.name)
     except Exception:
@@ -242,7 +277,7 @@ def _classify_domain(domain: str | None) -> str:
     return "other"
 
 
-# ─────────────────────────────────────────────────── the one function ──
+# ─────────────────────────────────────────────── the one function ──
 
 def trace_provenance(
     image_path: str | Path,
@@ -255,25 +290,23 @@ def trace_provenance(
 
     The core loop:
       1. Reverse-search the image
-      2. Classify the matching domains (AI gallery? stock photo?)
-      3. Fetch the best candidate (oldest / highest-relevance match)
-      4. Run the full pipeline on the fetched copy
-      5. If still inconclusive and depth < max_depth, recurse on the
-         fetched copy (the "retry" — maybe the upstream copy leads to
-         an even earlier version with intact provenance)
+      2. Check page context (titles, labels, URLs for AI keywords)
+      3. Classify the matching domains (AI gallery? stock photo?)
+      4. Fetch the best candidate match
+      5. Run the full pipeline on the fetched copy
+      6. If still inconclusive and depth < max_depth, recurse
 
-    Returns a dict with the search results, the upstream analysis (if
-    any), and notes documenting the chain. This dict goes straight into
-    the evidence card's notes — no new schema class needed.
+    Returns a dict with the search results, context analysis, the
+    upstream analysis (if any), and notes documenting the chain.
+    Goes straight into the evidence card's notes.
 
     Parameters
     ----------
     image_path : path to the local image to search for
     analyze_fn : the pipeline's analyze_image function (passed in to
-                 avoid circular imports; defaults to ai_image_id.main.analyze_image)
-    detector_ckpt : path to the detector checkpoint (forwarded to analyze_fn)
-    max_depth : how many retry hops to attempt (default 2 — original search
-                + one retry on the upstream copy)
+        avoid circular imports; defaults to analyze_image)
+    detector_ckpt : forwarded to analyze_fn
+    max_depth : retry hops (default 2)
     """
     image_path = Path(image_path)
 
@@ -297,7 +330,9 @@ def trace_provenance(
 
     # Check API availability
     has_api_key = bool(os.environ.get("GOOGLE_CLOUD_API_KEY"))
-    has_credentials = bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+    has_credentials = bool(
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
     has_vision_lib = False
     try:
         import google.cloud.vision  # noqa: F401
@@ -308,7 +343,8 @@ def trace_provenance(
     if not has_api_key and not (has_credentials and has_vision_lib):
         result["notes"].append(
             "M5 unavailable: set GOOGLE_CLOUD_API_KEY or "
-            "GOOGLE_APPLICATION_CREDENTIALS + pip install google-cloud-vision"
+            "GOOGLE_APPLICATION_CREDENTIALS + pip install "
+            "google-cloud-vision"
         )
         return result
 
@@ -331,30 +367,39 @@ def trace_provenance(
     result["stock_photo_match"] = "stock_photo" in domain_types
 
     if result["ai_gallery_match"]:
-        ai_domains = [d for d, t in zip(domains, domain_types) if t == "ai_gallery"]
+        ai_doms = [
+            d for d, t in zip(domains, domain_types)
+            if t == "ai_gallery"
+        ]
         result["notes"].append(
-            f"earliest matches include AI gallery domains: {', '.join(ai_domains)}"
+            "matches include AI gallery domains: "
+            + ", ".join(ai_doms)
         )
     if result["stock_photo_match"]:
-        stock_domains = [d for d, t in zip(domains, domain_types) if t == "stock_photo"]
+        stock_doms = [
+            d for d, t in zip(domains, domain_types)
+            if t == "stock_photo"
+        ]
         result["notes"].append(
-            f"matches found on stock photo platforms: {', '.join(stock_domains)}"
+            "matches on stock photo platforms: "
+            + ", ".join(stock_doms)
         )
 
-    # 2b. Page-context analysis — scan titles, URLs, and Google's labels
-    #     for AI-related keywords. Zero extra API calls; the data is already
-    #     in the search response.
+    # 2b. Page-context analysis — titles, URLs, Google labels
     context_hit, context_signals = _check_page_context(search)
     result["ai_context_match"] = context_hit
     if context_hit:
         result["notes"].append(
-            f"web context suggests AI origin ({len(context_signals)} signals): "
+            "web context suggests AI origin "
+            f"({len(context_signals)} signals): "
             + "; ".join(context_signals[:5])
         )
 
-    # 3. Try to fetch and re-analyze the best match
+    # 3. Fetch and re-analyze the best match
     if _depth >= max_depth:
-        result["notes"].append(f"max search depth ({max_depth}) reached")
+        result["notes"].append(
+            f"max search depth ({max_depth}) reached"
+        )
         return result
 
     for match in matches:
@@ -363,8 +408,10 @@ def trace_provenance(
             continue
 
         try:
-            upstream = analyze_fn(str(fetched), detector_ckpt=str(detector_ckpt)
-                                  if detector_ckpt else None)
+            kwargs = {}
+            if detector_ckpt:
+                kwargs["detector_ckpt"] = str(detector_ckpt)
+            upstream = analyze_fn(str(fetched), **kwargs)
             result["upstream_url"] = match.url
             result["upstream_verdict"] = upstream.ai_verdict.value
             result["chain"].append({
@@ -374,30 +421,39 @@ def trace_provenance(
                 "confidence": upstream.confidence,
             })
 
-            # If upstream has stronger evidence, we're done
+            # Upstream has stronger evidence — done
             if upstream.ai_verdict.value in ("verified", "likely"):
                 result["notes"].append(
                     f"upstream copy at {match.domain} → "
-                    f"{upstream.ai_verdict.value} ({upstream.confidence})"
+                    f"{upstream.ai_verdict.value} "
+                    f"({upstream.confidence})"
                 )
                 return result
 
-            # If upstream is also inconclusive, retry one level deeper
-            if upstream.ai_verdict.value == "inconclusive" and _depth + 1 < max_depth:
+            # Still inconclusive — retry one level deeper
+            if (
+                upstream.ai_verdict.value == "inconclusive"
+                and _depth + 1 < max_depth
+            ):
                 deeper = trace_provenance(
                     str(fetched), analyze_fn, detector_ckpt,
                     max_depth, _depth + 1,
                 )
-                if deeper.get("upstream_verdict") in ("verified", "likely"):
+                if deeper.get("upstream_verdict") in (
+                    "verified", "likely",
+                ):
                     result["upstream_url"] = deeper["upstream_url"]
-                    result["upstream_verdict"] = deeper["upstream_verdict"]
+                    result["upstream_verdict"] = (
+                        deeper["upstream_verdict"]
+                    )
                     result["chain"].extend(deeper["chain"])
                     result["notes"].extend(deeper["notes"])
                     return result
 
         except Exception as exc:
             result["notes"].append(
-                f"failed to analyze {match.domain}: {type(exc).__name__}"
+                f"failed to analyze {match.domain}: "
+                f"{type(exc).__name__}"
             )
         finally:
             try:
@@ -407,8 +463,8 @@ def trace_provenance(
 
     if not result["upstream_verdict"]:
         result["notes"].append(
-            f"found {len(matches)} web matches but none yielded "
-            f"stronger evidence than the local copy"
+            f"found {len(matches)} web matches but none "
+            f"yielded stronger evidence than the local copy"
         )
 
     return result
