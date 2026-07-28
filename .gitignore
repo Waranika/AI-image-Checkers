@@ -15,3 +15,5 @@ head.calibration.json
 
 # notebooks: strip outputs before committing
 .ipynb_checkpoints/
+
+.DS_Store
