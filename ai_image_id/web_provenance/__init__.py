@@ -371,7 +371,7 @@ def trace_provenance(
     image_path = Path(image_path)
 
     if analyze_fn is None:
-        from .main import analyze_image
+        from ..main import analyze_image
         analyze_fn = analyze_image
 
     result = {

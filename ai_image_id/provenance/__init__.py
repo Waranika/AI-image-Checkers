@@ -24,7 +24,7 @@ import json
 import re
 from pathlib import Path
 
-from .schema import ProvenanceEvidence
+from ..schema import ProvenanceEvidence
 
 # ------------------------------------------------------------- constants --
 

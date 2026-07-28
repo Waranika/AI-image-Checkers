@@ -13,7 +13,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .schema import SpectrumEvidence
+from ..schema import SpectrumEvidence
 
 
 def _radial_profile(mag: np.ndarray) -> np.ndarray:
