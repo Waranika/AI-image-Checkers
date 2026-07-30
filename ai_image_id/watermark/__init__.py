@@ -55,7 +55,8 @@ def _decode_dwtdct(rgb: np.ndarray, wm_len: int) -> list[int]:
     try:
         from imwatermark import WatermarkDecoder
         import cv2
-        decoder = WatermarkDecoder("bits", wm_len)  #Create class of decoder for bit sequence the length of the SD known watermark
+        decoder = WatermarkDecoder("bits", wm_len)  #Create class of decoder for bit sequence 
+        #the length of the SD known watermark
         bits = decoder.decode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), "dwtDct") #Runs decoder on the img and returns bits
         return [int(b) for b in bits]
     except Exception:
