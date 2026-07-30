@@ -55,8 +55,8 @@ def _decode_dwtdct(rgb: np.ndarray, wm_len: int) -> list[int]:
     try:
         from imwatermark import WatermarkDecoder
         import cv2
-        decoder = WatermarkDecoder("bits", wm_len)
-        bits = decoder.decode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), "dwtDct")
+        decoder = WatermarkDecoder("bits", wm_len)  #Creates the class of the decoder for a bit sequence with imwatermark Decoder the length of the Stable Diffusion known watermark
+        bits = decoder.decode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), "dwtDct") #Runs the decoder on the image and returns a list of bits
         return [int(b) for b in bits]
     except Exception:
         return dwt_dct.decode_bits(rgb, wm_len)
@@ -74,10 +74,10 @@ def _check_dwtdct(rgb: np.ndarray) -> list[WatermarkEvidence]:
             notes="image too small for reliable blind-watermark decoding",
         )]
 
-    best: Optional[WatermarkEvidence] = None
+    best: WatermarkEvidence | None = None
     for name, payload in KNOWN_PAYLOADS.items():
         decoded = _decode_dwtdct(rgb, len(payload))
-        acc = float(np.mean([d == p for d, p in zip(decoded, payload)]))
+        acc = float(np.mean([d == p for d, p in zip(decoded, payload)])) #Compare the decoded bits with the known payload
         ev = WatermarkEvidence(
             scheme="dwtDct",
             detected=acc >= DETECTION_THRESHOLD,
@@ -101,7 +101,7 @@ _TRUSTMARK_CACHE: dict = {}   # model_type -> TrustMark instance (each loads onc
 TRUSTMARK_VARIANTS = ("P", "Q", "B")
 
 
-def _check_trustmark(rgb: np.ndarray) -> list[WatermarkEvidence]:
+def _check_trustmark(rgb: np.ndarray) -> WatermarkEvidence:
     """Decode Adobe TrustMark watermark (Durable Content Credentials).
 
     Used by: Adobe Content Authenticity app (Durable Content Credentials),
@@ -113,10 +113,10 @@ def _check_trustmark(rgb: np.ndarray) -> list[WatermarkEvidence]:
     try:
         from trustmark import TrustMark
     except ImportError:
-        return [WatermarkEvidence(
+        return WatermarkEvidence(
             scheme="trustmark", applicable=False,
             notes="trustmark package not installed (pip install trustmark)",
-        )]
+        )
 
     pil_img = Image.fromarray(rgb)
     last_error = None
@@ -126,22 +126,22 @@ def _check_trustmark(rgb: np.ndarray) -> list[WatermarkEvidence]:
                 _TRUSTMARK_CACHE[variant] = TrustMark(verbose=False, model_type=variant)
             wm_secret, wm_present, wm_schema = _TRUSTMARK_CACHE[variant].decode(pil_img)
             if wm_present:
-                return [WatermarkEvidence(
+                return WatermarkEvidence(
                     scheme=f"trustmark-{variant}",
                     detected=True,
                     matched_payload=wm_secret,
                     notes=f"variant={variant}, schema={wm_schema}",
-                )]
+                )
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
 
     if last_error:
-        return [WatermarkEvidence(
+        return WatermarkEvidence(
             scheme="trustmark", applicable=False,
             notes=f"decoder error: {last_error}",
-        )]
-    return [WatermarkEvidence(scheme="trustmark", detected=False,
-                              notes="no TrustMark watermark found (tried P/Q/B)")]
+        )
+    return WatermarkEvidence(scheme="trustmark", detected=False,
+                              notes="no TrustMark watermark found (tried P/Q/B)")
 
 
 # ──────────────────────── decoder 3: Stable Signature BZH (Meta/IMATAG) ──
@@ -293,7 +293,7 @@ def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     results: list[WatermarkEvidence] = []
 
     results.extend(_check_dwtdct(rgb))               # 1. SD invisible-watermark
-    results.extend(_check_trustmark(rgb))             # 2. Adobe TrustMark (P/Q/B)
+    results.append(_check_trustmark(rgb))             # 2. Adobe TrustMark (P/Q/B) only one variant can be detected per image, so we return a single WatermarkEvidence
     results.extend(_check_stable_signature_bzh(rgb))  # 3. Stable Signature BZH
     results.extend(_note_closed_schemes())            # 4. documented-only
     # NOTE: _check_synthid_cnn (synthid_cnn.py) was evaluated and REJECTED —

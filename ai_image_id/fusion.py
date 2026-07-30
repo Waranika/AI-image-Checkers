@@ -1,6 +1,4 @@
-"""Step 3.6 — evidence fusion (rule layer of the notes' decision logic).
-
-Hierarchy:
+"""Hierarchy:
   1. Verified provenance/watermark naming an AI generator  -> AI (verified)
   2. Declared AI metadata (IPTC trainedAlgorithmicMedia, AI tool in Software) -> AI (likely)
      (metadata is trivially strippable/forgeable, so declared != verified)
