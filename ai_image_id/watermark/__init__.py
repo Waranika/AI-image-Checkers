@@ -24,7 +24,7 @@ SynthID (Google/OpenAI) has no public detector — reported as manual-verify.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional # noqa: F401
 
 import numpy as np
 from PIL import Image
@@ -55,8 +55,8 @@ def _decode_dwtdct(rgb: np.ndarray, wm_len: int) -> list[int]:
     try:
         from imwatermark import WatermarkDecoder
         import cv2
-        decoder = WatermarkDecoder("bits", wm_len)  #Creates the class of the decoder for a bit sequence with imwatermark Decoder the length of the Stable Diffusion known watermark
-        bits = decoder.decode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), "dwtDct") #Runs the decoder on the image and returns a list of bits
+        decoder = WatermarkDecoder("bits", wm_len)  #Create class of decoder for bit sequence the length of the SD known watermark
+        bits = decoder.decode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), "dwtDct") #Runs decoder on the img and returns bits
         return [int(b) for b in bits]
     except Exception:
         return dwt_dct.decode_bits(rgb, wm_len)
@@ -77,7 +77,7 @@ def _check_dwtdct(rgb: np.ndarray) -> list[WatermarkEvidence]:
     best: WatermarkEvidence | None = None
     for name, payload in KNOWN_PAYLOADS.items():
         decoded = _decode_dwtdct(rgb, len(payload))
-        acc = float(np.mean([d == p for d, p in zip(decoded, payload)])) #Compare the decoded bits with the known payload
+        acc = float(np.mean([d == p for d, p in zip(decoded, payload)])) #Compare decoded bits with the known payload
         ev = WatermarkEvidence(
             scheme="dwtDct",
             detected=acc >= DETECTION_THRESHOLD,
@@ -293,7 +293,7 @@ def analyze_watermarks(rgb: np.ndarray) -> list[WatermarkEvidence]:
     results: list[WatermarkEvidence] = []
 
     results.extend(_check_dwtdct(rgb))               # 1. SD invisible-watermark
-    results.append(_check_trustmark(rgb))             # 2. Adobe TrustMark (P/Q/B) only one variant can be detected per image, so we return a single WatermarkEvidence
+    results.append(_check_trustmark(rgb))             # 2. Adobe TrustMark (P/Q/B) only one variant so append
     results.extend(_check_stable_signature_bzh(rgb))  # 3. Stable Signature BZH
     results.extend(_note_closed_schemes())            # 4. documented-only
     # NOTE: _check_synthid_cnn (synthid_cnn.py) was evaluated and REJECTED —
