@@ -1,11 +1,39 @@
-# Identifying AI Image — Implementation Plan
+# Identifying AI Images — Implementation Plan
 
-**Goal:** A local-first, uncertainty-aware service that answers: *"Is this image AI-generated, and if so, by what?"* — by fusing provenance, watermark, forensic, and learned-detector signals, exactly following the 3-step structure of the project notes.
+**Goal:** Build an AI image detector that is reliable enough to give
+suspicions of an AI image when inputted straight from the generator.
 
-**Design philosophy (informed by 2026 SOTA):**
-- No universal detector exists. Recent benchmarks (NTIRE 2026 challenge, "How well are open-sourced AI-generated image detection models out-of-the-box", Feb 2026) show top commercial generators (Flux Dev, Firefly v4, Midjourney v7, Imagen 4) defeat most public detectors (18–30% accuracy), and training-data alignment matters more than architecture (20–60% variance within identical architectures).
-- Therefore: **evidence fusion with calibrated confidence** is the product, not a single classifier. "Inconclusive" is a first-class verdict.
-- Provenance (C2PA/SynthID) when present is near-decisive; its **absence is non-evidence**.
+## Design philosophy
+
+No universal AI image detector exists. Recent benchmarks (NTIRE 2026
+challenge, Feb 2026) show top commercial generators defeat most public
+detectors (18–30% accuracy), and training-data alignment matters more
+than architecture.
+
+What if, instead of relying on a single classifier, we investigated
+the traces a generator actually leaves behind? Every AI image carries
+potential evidence: metadata declarations, invisible watermarks embedded
+by the platform, and statistical patterns in the pixels themselves.
+This is actually what most production detection systems do —
+they combine multiple signal families rather than trusting any one:
+
+- **Hive Moderation** uses a trained classifier continuously retrained
+  against new generators, combined with C2PA/watermark checks, serving
+  commercial content-moderation clients at scale.
+- **Reality Defender** layers deepfake-specific classifiers with
+  metadata forensics and context-aware detection, selling primarily to
+  enterprises and governments (public API since 2025).
+- **Sightengine** combines frequency-domain analysis with pixel-level
+  classifiers and metadata inspection.
+- **Major platforms (Meta, Google, TikTok, YouTube)** run a four-layer
+  stack internally: C2PA Content Credentials, visual watermarks
+  (SynthID), metadata forensics, and trained classifiers — each layer
+  covering blind spots the others miss.
+
+Our approach follows the same principle: investigate every available
+trace, tier the evidence by reliability, and fuse it into a single
+honest verdict — with "inconclusive" as a first-class outcome when
+the evidence is insufficient.
 
 ---
 
@@ -14,250 +42,234 @@
 ```
                         ┌──────────────────────────────────────────┐
                         │              FastAPI service             │
-                        │  POST /analyze  (image upload or URL)    │
+                        │  POST /analyze  (image upload)           │
                         └───────────────┬──────────────────────────┘
                                         │
                               ┌─────────▼─────────┐
                               │   Ingest & prep   │  hash (SHA-256, pHash),
-                              │                   │  decode, EXIF-safe copy
+                              │                   │  decode, PIL load
                               └─────────┬─────────┘
               ┌─────────────────────────┼──────────────────────────┐
               │                         │                          │
    ┌──────────▼─────────┐   ┌──────────▼──────────┐   ┌───────────▼──────────┐
-   │ M1 Provenance      │   │ M2 Watermark        │   │ M3 Intrinsic         │
-   │ exiftool, c2patool │   │ decoders            │   │ forensics            │
-   │ IPTC DigitalSource │   │ invisible-watermark │   │ FFT spectrum, PRNU/  │
-   │ Type, XMP          │   │ Stable Signature    │   │ noiseprint, JPEG QT, │
-   └──────────┬─────────┘   │ (Tree-Ring: N/A*)   │   │ ELA, patch stats     │
-              │             └──────────┬──────────┘   └───────────┬──────────┘
+   │ M1 Provenance      │   │ M2 Watermark        │   │ M4 Learned detector  │
+   │ pyexiftool, c2pa   │   │ decoders            │   │ frozen DINOv2        │
+   │ IPTC, PNG chunks,  │   │ DWT-DCT, TrustMark  │   │ + attention-pooling  │
+   │ camera EXIF        │   │ Stable Sig. BZH     │   │ head, calibrated     │
+   └──────────┬─────────┘   └──────────┬──────────┘   └───────────┬──────────┘
               │                        │                          │
-              │             ┌──────────▼──────────┐               │
-              │             │ M4 Learned detector │               │
-              │             │ frozen DINOv2/CLIP  │               │
-              │             │ + trained head,     │               │
-              │             │ calibrated          │               │
-              │             └──────────┬──────────┘               │
               └────────────────────────┼──────────────────────────┘
                              ┌─────────▼─────────┐
-                             │  M6 Fusion engine │  rules + meta-classifier
+                             │  Fusion engine    │  rule cascade → verdict
+                             └─────────┬─────────┘
+                                       │
+                   (if inconclusive)   │
+                             ┌─────────▼─────────┐
+                             │  M5 Web provenance │  Google Vision reverse
+                             │  reverse search +  │  search + page-context
+                             │  page-context      │  analysis + retry loop
                              └─────────┬─────────┘
                              ┌─────────▼─────────┐
-                             │  Verdict report   │  JSON per project schema
+                             │  Verdict report   │  JSON per schema
                              └───────────────────┘
-
-   M5 Reverse image search (async, optional, API-key gated):
-   Google Vision Web Detection → Bing Visual Search → TinEye → Wayback CDX
 ```
 
-*Tree-Ring only applies when you control generation (watermark is injected in the initial latent), so it's included as a demo module, not a detector for arbitrary images.
+M3 (FFT spectral forensics) was implemented and evaluated but demoted
+to note-only after false-positiving on real photos' JPEG block harmonics.
+It runs but never moves a verdict.
 
-**Stack:** Python 3.11+, FastAPI + Pydantic v2, PyTorch, Celery + Redis (async reverse-search jobs), PostgreSQL (analysis history), Docker Compose. Gradio or small React front-end for the demo.
+**Stack:** Python 3.12, pip-installable package (`pip install -e .`),
+PyTorch (optional, for M4), Google Colab for training/evaluation, Google
+Cloud Vision API (optional, for M5). FastAPI for the REST endpoint
+(optional dependency). CI: pytest + ruff on GitHub Actions.
 
 **Repo layout:**
 
 ```
-ai-image-id/
-├── src/
-│   ├── api/               # FastAPI routes, schemas
-│   ├── ingest/            # decoding, hashing, safe copies
-│   ├── provenance/        # M1: exiftool + c2patool wrappers
-│   ├── watermark/         # M2: decoders (invisible-watermark, stable-signature)
-│   ├── forensics/         # M3: fft.py, prnu.py, jpeg.py, ela.py
-│   ├── detector/          # M4: model, training, calibration
-│   ├── osint/             # M5: vision_api.py, tineye.py, wayback.py
-│   ├── fusion/            # M6: rules.py, meta_model.py, report.py
-│   └── common/            # config, logging, result schema
-├── training/              # dataset prep, train/eval scripts, sweeps
-├── eval/                  # benchmark harness (GenImage, NTIRE, robustness)
-├── tests/
-├── docker/
-└── docs/                  # model card, evaluation report, architecture
+ai_image_id/                # pip-installable package
+├── __init__.py                 re-exports analyze_image, trace_provenance
+├── schema.py                   Pydantic models (Evidence, Verdict, etc.)
+├── ingest.py                   SHA-256, pHash, PIL loading
+├── fusion.py                   rule cascade → AnalysisResult
+├── main.py                     analyze_image() + FastAPI + CLI
+├── provenance/                 M1 — C2PA, IPTC, gen-params, camera EXIF
+│   └── __init__.py
+├── watermark/                  M2 — decoder registry
+│   ├── __init__.py                 DWT-DCT, TrustMark P/Q/B, BZH
+│   ├── dwt_dct.py                  vendored blind codec (torch-free)
+│   └── synthid_cnn.py              evaluated + rejected (documented)
+├── forensics/                  M3 — FFT heuristic (demoted to note-only)
+│   └── __init__.py
+├── detector/                   M4 — DINOv2 + attention-pooling head
+│   └── __init__.py
+└── web_provenance/             M5 — reverse search + context analysis
+    └── __init__.py
+training/                   # training pipeline (outside the package)
+├── prepare_data.py             de-confounded split preparation
+├── embed.py                    DINOv2 embedding precomputation
+├── train_head.py               attention-pooling head training
+└── calibrate_eval.py           temperature scaling, cross-gen tables
+notebooks/                  # scenario testing + run records
+├── 02_train_detector.ipynb     M4 training + cross-generator eval
+├── 03_m1_provenance_scenarios  M1 validation + transport matrix
+├── 04_m2_watermark_scenarios   M2 validation + transport matrix
+├── 05_m4_detector_scenarios    Synthbuster zero-shot + transport matrix
+├── 06_m5_web_provenance        reverse search + context analysis
+└── 07_full_pipeline_test       all modules active, integration test
+tests/                      # pytest suite
+docs/                       # results.md, model card
 ```
 
 ---
 
 ## 2. Module specifications
 
-# M1 — Provenance & Metadata
+### M1 — Provenance & metadata
 
-## How it works
+When an image is created — either by a camera or generated by an AI
+model — data is associated to it through several channels, each
+embedded differently into the file and each with different durability.
 
-When an image is created — either by a camera or generated by an AI model — data is associated to it through several channels, each embedded differently into the file and each with different durability.
+**Standard metadata fields.** A camera writes its make, model, exposure
+settings into EXIF headers. AI tools may write their name into Software
+or Creator fields. Meta labels outputs with IPTC `DigitalSourceType =
+trainedAlgorithmicMedia`. These are declarations, not proof — trivially
+writable by anyone with exiftool.
 
-### Standard metadata fields
+> In the code: `_exiftool_json()` reads all metadata once; three
+> scanners (`_scan_iptc_source_type`, `_scan_ai_tool_fields`,
+> `_scan_camera_exif`) extract specific signals from the flat dict.
 
-A camera writes its make, model, exposure settings, and sometimes GPS coordinates into EXIF headers. An AI tool may write its name into the Software or Creator field — Midjourney, for instance, tags itself in IPTC headers, and Meta labels its outputs with a specific industry-standard field called `DigitalSourceType` set to `trainedAlgorithmicMedia`, which is essentially a machine-readable declaration: "this was made by AI." These fields sit in well-known locations inside the file (EXIF, XMP, IPTC blocks), are readable by any metadata viewer, and are also trivially writable by anyone — one command in exiftool and you can make any photo claim it was shot on a Hasselblad or generated by Midjourney. They're declarations, not proof.
+**Generation-parameter chunks.** Local SD tools (A1111 WebUI, ComfyUI,
+NovelAI) write the entire generation recipe — prompt, sampler, seed,
+model name — into PNG text chunks. Stronger than a bare tag (a full
+recipe is hard to explain innocently), but format-specific and stripped
+by any re-encode.
 
-> **In the code:** all metadata is read once by `_exiftool_json()` ([provenance.py](ai_image_id/provenance.py)), which calls pyexiftool and returns a flat dictionary of every tag in the file. That dictionary is then passed to three specialized scanners:
->
-> - `_scan_iptc_source_type()` — matches the DigitalSourceType value against the `IPTC_SOURCE_CATEGORIES` table, which maps the full IPTC vocabulary to evidence categories (`ai`, `ai_composite`, `synthetic`, `capture`), not just the one AI value.
-> - `_scan_ai_tool_fields()` — iterates over keys ending in `Software`, `CreatorTool`, `Creator`, `Credit`, or `Description` and matches their values against the `AI_TOOL_MARKERS` list (18 known AI tool substrings).
-> - `_scan_camera_exif()` — counts how many of the five core camera fields (`Make`, `Model`, `ExposureTime`, `FNumber`, `ISO`) are present and flags a coherent block when at least four co-occur.
+> In the code: `_scan_generation_params()` regex-matches the A1111
+> recipe pattern and extracts the model name; checks for ComfyUI's
+> `class_type` JSON and NovelAI's software tag.
 
-### Generation-parameter chunks
+**C2PA Content Credentials.** The strongest channel — cryptographic.
+OpenAI, Adobe, and others sign a manifest embedded in a JUMBF box
+recording who created the image, what actions were performed, and
+optionally a chain of ingredients. The signature is cryptographic:
+modifying pixels invalidates it.
 
-A richer variant exists for images generated locally using tools like Stable Diffusion. The most popular interfaces — A1111 WebUI, ComfyUI, NovelAI — write the entire generation recipe directly into the image file as a PNG text chunk: the prompt, the sampler, the number of steps, the seed, and often the model name. This is more than a label — it's a full reproducibility record, and it's harder to explain innocently than a single tag. But it's still declared data, stored in a format-specific container (PNG text chunks don't exist in JPEGs), and stripped by any re-encode.
+> In the code: `_c2pa_read()` opens the manifest store via
+> `c2pa-python`, splits validity into `signature_valid` and
+> `signer_trusted`. `_walk_c2pa_store()` traverses every manifest
+> (including ingredients) for AI markers and actions history.
 
-> **In the code:** `_scan_generation_params()` handles all three tools in one pass over the same exiftool dictionary. For A1111/WebUI, it regex-matches the `PNG:Parameters` value against `A1111_RECIPE_RE` — the pattern `Steps: \d+.*?(sampler|cfg scale|seed):` — which is the recipe's structural signature rather than any brand name. A second regex `A1111_MODEL_RE` extracts the `Model:` field for free attribution. For ComfyUI, it checks for keys `prompt` or `workflow` whose value contains `"class_type"` (the fingerprint of ComfyUI's node-graph JSON). For NovelAI, it checks for `software` with value `NovelAI`. The function returns on the first match, setting `generation_params_tool` and optionally `generation_params_model` on the evidence.
-
-### C2PA Content Credentials (cryptographic)
-
-The strongest channel. When OpenAI generates an image through ChatGPT, or Adobe through Firefly, the tool constructs a signed manifest embedded in a JUMBF box inside the file. That manifest records who created the image (the claim generator — e.g. "OpenAI Media Service API"), what was done to it (actions: created, converted, watermarked), what tool version signed it, and optionally a chain of ingredients if the image was built from other images. A Photoshop file containing a Firefly-generated layer carries the AI evidence one level down, in the ingredient's manifest, not the top-level one. The signature is cryptographic: modifying the image's pixels invalidates it, which is what makes it proof rather than declaration. The module checks both the signature integrity and whether the signer is on a known trust list — "cryptographically intact" and "signed by a trusted issuer" are different strengths.
-
-> **In the code:** `_c2pa_read()` opens the manifest store via the `c2pa-python` library (with a version-fallback try/except for an API change that silently broke the pipeline once — the comment explains why the error handling is deliberately narrow). It returns the presence flag, the validation state string (`"Trusted"`, `"Valid"`, or `"Invalid"`), the generator name, and the raw store. In `analyze_provenance()`, the state is split into `c2pa_signature_valid` (intact cryptography) and `c2pa_signer_trusted` (signer on the trust list). Then `_walk_c2pa_store()` iterates over *every* manifest in the store — not just the active one — running the `AI_TOOL_MARKERS` match against each generator, collecting `c2pa.actions` entries with their `softwareAgent` names, and checking assertion data for `trainedAlgorithmicMedia` or `digitalCapture` declarations.
-
-## Verdict tiering
-
-The tiering happens in [fusion.py](ai_image_id/fusion.py):
-
-| signal | verdict | confidence | rationale |
-|---|---|---|---|
-| Valid C2PA + AI generator (top-level or ingredient) | `verified` | 0.98 | cryptographic proof |
-| Valid C2PA + capture claim | `unlikely` | 0.75 | cryptographic, but only camera-side |
-| Generation-parameter chunk (A1111/ComfyUI/NovelAI) | `likely` | 0.85 | declared but rich — a full recipe is hard to fake innocently |
-| IPTC `trainedAlgorithmicMedia` | `likely` | 0.85 | declared, single field |
-| IPTC `compositeWithTrainedAlgorithmicMedia` | `likely` | 0.80 | declared AI-edited composite |
-| AI tool name in Software/Creator field | `likely` | 0.75 | declared, weakest tier |
-| IPTC capture / camera-EXIF block | note only | — | declared, forgeable — reserved as future PRNU corroborator |
-| Nothing found | `inconclusive` | 0.50 | absence is non-evidence |
-
-## Transport fragility (measured)
-
-All of this data travels with the file only as long as the file isn't re-processed. The following matrix was measured on a verified OpenAI image pushed through six realistic transports ([notebook 03](notebooks/03_m1_provenance_scenarios.ipynb)):
-
-| transport | C2PA | gen_params | IPTC | tool_fields | camera_exif | verdict |
-|---|---|---|---|---|---|---|
-| original | ✓ | · | · | · | · | verified |
-| JPEG re-save | · | · | · | · | · | inconclusive |
-| screenshot | · | · | · | · | · | inconclusive |
-| messenger (resize+Q70) | · | · | · | · | · | inconclusive |
-| exiftool -all= | **✓** | · | · | · | · | **verified** |
-| crop | · | · | · | · | · | inconclusive |
-| PIL re-encode | · | · | · | · | · | inconclusive |
-
-**Key finding:** C2PA is the only M1 signal that survives any transport — and only metadata-stripping, because JUMBF boxes live outside exiftool's reach. Every declared signal dies at the first re-save. Even C2PA dies to any transform that touches the image bytes (crop, re-encode).
-
-> **In the code:** the transport fragility isn't handled by `provenance.py` — it's a property of the world. What the code does is respect it: when `ProvenanceEvidence` comes back empty, [fusion.py](ai_image_id/fusion.py) falls through to `inconclusive`, never to `unlikely`. The `unlikely` verdict requires positive evidence of human origin (a C2PA capture claim or a confident classifier score), not merely the absence of AI evidence. That asymmetry — easy to confirm AI when evidence exists, impossible to confirm human from silence — is M1's single most important design invariant.
-
-## Limitations
-
-- **Absence is non-evidence.** Metadata is stripped by screenshots, uploads, messengers, and re-encodes. A clean file proves nothing.
-- **Declared signals are forgeable.** IPTC tags and PNG chunks can be written by anyone with exiftool or PIL. This is why they cap at `likely`, never `verified`.
-- **C2PA trust depends on the library's trust list.** `signer_trusted: False` on a legitimate production file may reflect missing trust-anchor config, not forgery.
-- **Photo-domain only.** No special handling for video, audio, or document files.
-- **No pixel analysis.** M1 reads labels and signatures, not the image content itself. That's the job of M2 (watermarks), M3 (forensics), and M4 (classifier).
+**Camera-EXIF block.** A coherent Make/Model/exposure block is a weak
+human-side hint (note-tier only, trivially forgeable).
 
 ### M2 — Watermark decoders
 
-| Scheme | Feasibility for arbitrary images | Implementation |
-|---|---|---|
-| `invisible-watermark` (DWT-DCT, used by SD ≤2.x/SDXL defaults) | Yes — public decoder | pip package, decode "StableDiffusionV1"-style payloads |
-| Stable Signature (Meta/ICCV'23) | Partial — decoder is public, but keys are per-model | run open decoder; report bit-accuracy vs. threshold |
-| SynthID (Google) | No public image detector API — verification goes through the Gemini app/portal | document as manual step; link out in the report |
-| Tree-Ring | Only for self-generated images | implement as an *embedding + detection demo* on local SD, great for the write-up |
+A registry of public watermark decoders, each checking a different
+scheme. Every decoder is optional — missing dependencies degrade
+gracefully (`applicable=False`) rather than crashing.
 
-- Output per scheme: `{scheme, detected, score, threshold, applicable}`.
-- Effort: ~1 week (Tree-Ring demo +3–4 days, optional but a strong portfolio differentiator).
+**DWT-DCT (SD default).** The `invisible-watermark` library's blind
+codec, used by Stable Diffusion pipelines. Checks against two known
+payloads (SDXL 48-bit, SD-v1 text). Vendored fallback when `imwatermark`
+is not installed.
 
-### M3 — Intrinsic forensics
+> In the code: `_check_dwtdct()` decodes bits and compares against
+> `KNOWN_PAYLOADS`; reports bit accuracy with threshold at 0.90.
 
-- **Frequency:** 2D FFT of high-pass residual → radial power spectrum; peak detection vs. natural camera roll-off; azimuthal anomaly score. (numpy/scipy, ~2 days.)
-- **Noise/PRNU:** Noiseprint++ or a wavelet-denoise residual PRNU estimator; consistency across blocks → "camera-like" score. (Existing open implementations; ~4 days integration.)
-- **JPEG:** `jpegio` to read quantization tables (match against known camera/library tables), double-compression detection via DCT histogram periodicity, block-grid alignment. (~3 days.)
-- **ELA + patch statistics:** local entropy map, over-smooth texture flags. Cheap, weak signal — weight low. (~1 day.)
-- Each analyzer returns a normalized score in [0,1] with a validity flag (e.g., PRNU invalid if image < 512px or heavily recompressed).
+**TrustMark (Adobe).** Neural watermark behind "Durable Content
+Credentials." Loops all model variants (P, Q, B) because they're
+mutually incompatible — Adobe's Content Authenticity app embeds with P.
 
-### M4 — Learned detector (the ML centerpiece)
+> In the code: `_check_trustmark()` caches a `TrustMark` instance
+> per variant, returns on the first detected variant.
 
-**Architecture (per 2025–26 SOTA):** frozen vision foundation model backbone (DINOv2 ViT-L or CLIP ViT-L/14) + lightweight trainable head over patch tokens (attention pooling, TAP-style). Rationale: frozen-VFM approaches currently show the best cross-generator generalization (e.g., TAP trained only on SD1.5 generalizes to SDXL/SD3/Flux on OpenSDI), and they're cheap to train — a single consumer GPU or modest cloud budget suffices.
+**Stable Signature BZH (IMATAG).** Zero-bit detector for images from
+Stable-Signature-watermarked models (e.g. SDXL-turbo IMATAG builds).
+Returns watermarked yes/no with a p-value, no payload.
 
-**Training data:** GenImage subset (~100–200K balanced) + supplement with recent generators (Flux, SD3, Midjourney v6/7 samples from public datasets) because benchmark evidence shows training-data alignment dominates architecture. Real images: ImageNet val + RAISE/FFHQ slices matched for resolution and JPEG quality (critical — quality-factor confounds are a known benchmark trap; force matched Q distributions between classes).
+> In the code: `_check_stable_signature_bzh()` runs the HF ResNet-18
+> model; sigmoid of the logit gives p(watermarked).
 
-**Robustness augmentation (train + eval):** JPEG Q∈[30,95], resize [0.5×–2×], center/random crop, Gaussian blur σ∈[0,3], sharpening — mirroring the NTIRE 2026 transform suite.
+**Closed schemes (documented, not detected).** SynthID (Google/OpenAI)
+requires Google's private keys — independent detection is
+cryptographically impossible. A third-party CNN surrogate was evaluated
+and rejected (fired on all images). Meta's invisible watermark has no
+public decoder.
 
-**Calibration:** temperature scaling on a held-out split; report calibrated probability + ECE. Optionally conformal prediction to output verdict sets ("AI or inconclusive at 90% coverage") — an uncommon and impressive touch.
+### M4 — Learned detector
 
-**Deliverables:** training script (PyTorch Lightning or plain loop + hydra config), W&B/TensorBoard logs, model card documenting training data, known failure modes, and OOD behavior.
+Frozen DINOv2 ViT-S/14 backbone + attention-pooling head (~500K
+trainable params). The frozen-VFM approach shows the best cross-
+generator generalization in current literature.
 
-### M5 — Reverse image search (Step 2 of notes)
+**Training pipeline:** `prepare_data.py` de-confounds by matching
+JPEG quality and resolution distributions between real and fake
+classes (prevents compression-shortcut learning). `embed.py`
+precomputes frozen patch-token embeddings as fp16 shards (run once,
+reuse). `train_head.py` trains the attention-pooling head on the
+shards with preallocated fp16 host buffers (per-batch fp32 GPU
+transfer to stay within Colab's 12.7 GB RAM). `calibrate_eval.py`
+fits a temperature scalar and computes ECE, AUROC, cross-generator
+tables.
 
-Pluggable providers behind one interface, all official APIs (ToS-compliant, as in the notes):
+**Architecture rationale:** frozen backbone means embeddings are
+precomputed once (~200 MB per generator's val slice), the head trains
+in minutes, and cross-generator evaluation is a forward pass over
+cached shards — the full training + eval cycle fits in a free Colab
+session.
 
-1. Google Cloud Vision Web Detection → `pagesWithMatchingImages`, `visuallySimilarImages`
-2. Bing Visual Search → `pagesIncluding`
-3. TinEye API (paid, optional) → oldest-index sort
-4. Wayback CDX for earliest-capture timestamps of candidate URLs
-5. Dedup/cluster with pHash (Hamming ≤ 10) + CLIP cosine ≥ 0.90, exactly per the notes' thresholds
+### M5 — Web provenance
 
-Runs as an async Celery job (network-bound, seconds–minutes); the forensic verdict never blocks on it. Result feeds an `earliest_candidate` field for provenance context (e.g., image predates the claimed generator's release → strong human/real evidence).
+When the pipeline returns inconclusive, M5 asks the internet whether
+this image has been seen before and what context surrounds it.
 
-### M6 — Fusion & verdict
+**Three layers of signal from one API call:**
 
-Two layers:
+1. **Page-context keywords** — Google Cloud Vision's `WEB_DETECTION`
+   returns `bestGuessLabels`, page titles, and URLs. These are scanned
+   for AI-related terms ("deepfake", "ai generated", generator names).
+   The keywords only fire on pages that already matched the image
+   visually, so even broad terms like "fake" carry real signal.
 
-1. **Hard rules (hierarchy of trust):**
-   - Valid C2PA manifest naming an AI generator, or verified watermark → `AI (verified)`
-   - Valid C2PA with camera capture claim + consistent PRNU → `Human (likely)`
-   - Reverse search finds the image predating generative-AI availability → `Human (likely)`
-2. **Meta-classifier for the gray zone:** logistic regression (or gradient-boosted trees) over the signal vector {detector p, FFT peaks, PRNU score, JPEG flags, ELA}; trained on the eval corpus; conservative thresholds so that low-evidence cases land in `Inconclusive`.
+2. **Domain classification** — matching domains classified as AI
+   galleries (civitai, midjourney.com, lexica.art) or stock photo
+   platforms (flickr, shutterstock). Contextual evidence, not proof.
 
-**Output schema** (matches project notes):
+3. **Upstream re-analysis** — fetch the matched image and run the full
+   pipeline on it. If the upstream copy has intact C2PA or watermarks
+   that the local (stripped) copy lost, the verdict is inherited
+   through a documented chain. Recursive: if the upstream is also
+   inconclusive, retry one level deeper.
 
-```json
-{
-  "ai_verdict": "verified | likely | inconclusive | unlikely",
-  "confidence": 0.87,
-  "evidence": {
-    "provenance": {"c2pa": {...}, "iptc": {...}},
-    "watermark": {"scheme": "...", "score": 0.0},
-    "prnu": {"present": false, "score": 0.12},
-    "spectrum": {"peaks": [...], "anomaly": 0.71},
-    "jpeg": {"double_compression": false, "qt_match": "unknown"},
-    "detector": {"model": "dinov2-tap-v1", "p_calibrated": 0.91, "robustness_drift": 0.06},
-    "osint": {"earliest_candidate": {"url": "...", "wayback_first": "..."}}
-  },
-  "notes": ["watermark absence is non-evidence", "image was recompressed; PRNU down-weighted"]
-}
-```
+> In the code: `trace_provenance()` is the single entry point — one
+> function that searches, classifies, checks context, optionally
+> fetches and re-analyzes, and returns a dict that goes straight into
+> the evidence card. The search backend (`_reverse_search`) is a
+> single function to swap for TinEye, SerpApi, or Bing.
 
----
+### Fusion engine
 
-## 3. Evaluation protocol
+A rule cascade in `fusion.py` that tiers evidence by reliability:
 
-- **Benchmarks:** GenImage (cross-generator protocol: train SD1.4, test on 8 held-out generators), OpenSDI, and the NTIRE 2026 challenge dataset (108,750 real / 185,750 fake from 42 generators, 36 transforms) — the current gold standard for "in the wild" robustness.
-- **Metrics:** AUROC + balanced accuracy per generator; mean cross-generator accuracy; robustness curves (accuracy vs. JPEG Q, vs. resize factor); ECE for calibration; attribution accuracy (generator-family classification) as a stretch goal.
-- **Honesty checks:** matched JPEG-quality and resolution distributions between real/fake classes; report per-transform degradation, not just clean-image numbers.
-- **Fusion evaluation:** show fusion beats the learned detector alone on OOD generators (this is the headline result of the write-up).
+1. **Verified** — cryptographic proof: valid C2PA manifest naming an
+   AI generator (top-level or ingredient), or a decoded watermark
+   payload (DWT-DCT, TrustMark).
 
----
+2. **Likely** — declared or learned signal: generation-parameter
+   chunks, IPTC AI tags, learned watermark detection (BZH), the M4
+   classifier above threshold, or M5 web context with multiple
+   independent sources.
 
-## 4. Phased roadmap (~10–12 weeks part-time)
+3. **Inconclusive** — the honest default when evidence is
+   insufficient. Absence of signals is non-evidence: metadata is
+   stripped by screenshots, watermarks are stripped by recompression,
+   and a clean file proves nothing.
 
-| Phase | Duration | Deliverable |
-|---|---|---|
-| 0 — Scaffolding | 1 wk | repo, Docker, FastAPI skeleton, result schema, CI (pytest + ruff) |
-| 1 — Provenance MVP | 1–2 wk | M1 + M2 (invisible-watermark, Stable Signature decoder); end-to-end `/analyze` returning provenance verdicts. **Already demo-able.** |
-| 2 — Learned detector | 3–4 wk | M4 trained + calibrated; eval harness on GenImage; robustness sweep report |
-| 3 — Forensics + fusion | 2–3 wk | M3 analyzers, M6 rules + meta-classifier; fusion-vs-detector ablation |
-| 4 — OSINT + demo + write-up | 2 wk | M5 providers, Gradio/HF Spaces demo, model card, technical blog post |
-| Stretch | — | Tree-Ring embed/detect demo; conformal prediction; generator-family attribution head |
+4. **Unlikely** — positive evidence of human origin: C2PA capture
+   claim, or a confidently-low classifier score. Requires positive
+   evidence, not merely the absence of AI signals.
 
----
-
-## 5. Risk mapping (from the project notes)
-
-| Risk (notes) | Mitigation in this design |
-|---|---|
-| Generalization across generators/versions | frozen-VFM detector (best current OOD behavior); fusion so detector isn't a single point of failure; per-generator eval reporting |
-| Robustness to post-processing | NTIRE-style augmentation at train time; robustness-drift term down-weights detector confidence at inference |
-| Adversarial evasion / watermark removal | verdict taxonomy treats absence as non-evidence; rules never claim "human" from missing watermark |
-| Dataset bias / domain shift | matched Q/resolution distributions; report ECE; conformal option |
-| False-positive ethics | conservative thresholds; `inconclusive` default; every verdict ships with machine-readable evidence + caveats |
-
----
-
-## 6. Portfolio positioning (job-asset angle)
-
-- **What it demonstrates:** production ML service design (FastAPI, async workers, Docker), transfer learning on foundation models, rigorous evaluation methodology, calibration/uncertainty — precisely the ML Engineer skill profile.
-- **Artifacts to publish:** GitHub repo with CI, hosted demo (HF Spaces), a model card, and a blog post titled around the honest finding ("Why no single AI-image detector works — and how evidence fusion helps").
-- **Interview stories it generates:** cross-generator generalization failure analysis, calibration under distribution shift, designing for "inconclusive" as a product decision.
+This hierarchy is the project's core invariant: easy to confirm AI
+when evidence exists, impossible to confirm human from silence.
