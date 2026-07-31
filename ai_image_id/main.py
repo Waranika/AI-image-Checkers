@@ -24,7 +24,8 @@ def analyze_image(path: str | Path, detector_ckpt: str | Path | None = None) -> 
     evidence = Evidence(
         provenance=analyze_provenance(img.path),
         watermarks=analyze_watermarks(img.rgb),
-        spectrum=analyze_spectrum(img.rgb),
+        #spectrum=analyze_spectrum(img.rgb),
+        #spectrun is unreliable, so we ignore it for now
         detector=analyze_detector(img.rgb, ckpt=detector_ckpt),
     )
     return fuse(evidence, sha256=img.sha256, phash=img.phash)

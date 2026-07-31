@@ -139,7 +139,7 @@ def fuse(evidence: Evidence, sha256: str, phash: str) -> AnalysisResult:
 
     # Rule 3c — spectral heuristic alone is a single weak signal: note it, never
     # let it flip the verdict without agreement from another signal.
-    if spec.valid and spec.anomaly_score >= 0.8:
+    if spec and spec.valid and spec.anomaly_score >= 0.8:
         notes.append(
             f"spectral peaks present ({spec.n_peaks}) — single weak signal, insufficient alone"
         )

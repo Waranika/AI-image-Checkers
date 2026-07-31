@@ -64,7 +64,7 @@ class DetectorEvidence(BaseModel):
 class Evidence(BaseModel):
     provenance: ProvenanceEvidence
     watermarks: list[WatermarkEvidence] = Field(default_factory=list)
-    spectrum: SpectrumEvidence
+    spectrum: SpectrumEvidence | None = None
     detector: Optional[DetectorEvidence] = None
 
 

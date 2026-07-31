@@ -1,4 +1,4 @@
-"""Step 3.3 (subset) — frequency-domain heuristic.
+"""frequency-domain heuristic - UNRELIABLE
 
 Natural photos show a smooth power-law roll-off in the radial power spectrum of the
 high-pass residual. Generative upsampling (GAN transposed conv, some diffusion
