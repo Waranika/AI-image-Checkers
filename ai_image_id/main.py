@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .forensics import analyze_spectrum
+from .forensics import analyze_spectrum # noqa: F401
 from .fusion import fuse
 from .ingest import ingest
 from .provenance import analyze_provenance
