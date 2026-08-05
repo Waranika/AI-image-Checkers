@@ -142,6 +142,5 @@ store them in Drive under `ai_image_id/runs/<commit>/`.
 
 ## Module documentation
 
-- [M1 Provenance — how metadata signals are read, tiered, and survive transport](docs/m1_provenance.md)
 - [Implementation plan — architecture, module specs, references](docs/implementation_plan.md)
 - [Results log — every measurement with conditions and caveats](docs/results.md)
